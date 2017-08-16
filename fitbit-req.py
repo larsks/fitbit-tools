@@ -1,7 +1,12 @@
-import json
-import fitbit
-import subprocess
+import argparse
 import BaseHTTPServer
+import fitbit
+import json
+import logging
+import subprocess
+
+LOG = logging.getLogger('fitbit-req')
+
 
 class OAuthResponseHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     def error(self, code, msg):
@@ -30,31 +35,76 @@ class OAuthResponseHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write('Thanks!')
 
+    def log_request(self, *args, **kwargs):
+        pass
+
+
 class Server(BaseHTTPServer.HTTPServer):
-    def __init__(self, state):
-        BaseHTTPServer.HTTPServer.__init__(self,
-            ('127.0.0.1', 3863),
-            OAuthResponseHandler)
+    def __init__(self, state, port=3863):
+        BaseHTTPServer.HTTPServer.__init__(
+            self, ('127.0.0.1', port), OAuthResponseHandler)
 
         self.state = state
         self.auth_code = None
 
-with open('client.json') as fd:
-    client = json.load(fd)
 
-c = fitbit.Fitbit(client['client_id'], client['client_secret'],
-                  redirect_uri='http://localhost:3863')
-url, state = c.client.authorize_token_url()
-subprocess.check_call(['xdg-open', url])
+def parse_args():
+    p = argparse.ArgumentParser()
 
-s = Server(state=state)
-while True:
-    s.handle_request()
-    if s.auth_code:
-        break
+    g = p.add_argument_group('Authentication options')
+    g.add_argument('--client', '-C',
+                   default='client.json')
+    g.add_argument('--token', '-T',
+                   default='token.json')
+    g.add_argument('--port', '-p',
+                   default=3863,
+                   type=int)
 
-token = c.client.fetch_access_token(s.auth_code)
+    g = p.add_argument_group('Logging options')
+    g.add_argument('--debug', '-d',
+                   action='store_const',
+                   const='DEBUG',
+                   dest='loglevel')
+    g.add_argument('--verbose', '-v',
+                   action='store_const',
+                   const='INFO',
+                   dest='loglevel')
 
-with open('token.json', 'w') as fd:
-    json.dump(token, fd)
+    p.set_defaults(loglevel='WARNING')
 
+    return p.parse_args()
+
+
+def handle_oauth_redirect(state):
+    s = Server(state=state)
+    LOG.info('waiting for oauth redirect')
+    while True:
+        s.handle_request()
+        if s.auth_code:
+            break
+
+    return s.auth_code
+
+
+def main():
+    args = parse_args()
+    logging.basicConfig(level=args.loglevel)
+
+    with open(args.client) as fd:
+        LOG.info('reading client id from %s', args.client)
+        client = json.load(fd)
+
+    c = fitbit.Fitbit(client['client_id'], client['client_secret'],
+                      redirect_uri='http://localhost:3863')
+    url, state = c.client.authorize_token_url()
+    subprocess.check_call(['xdg-open', url])
+
+    code = handle_oauth_redirect(state)
+    token = c.client.fetch_access_token(code)
+
+    with open(args.token, 'w') as fd:
+        LOG.info('writing token to %s', args.token)
+        json.dump(token, fd)
+
+if __name__ == '__main__':
+    main()
