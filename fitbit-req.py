@@ -4,42 +4,51 @@ import fitbit
 import json
 import logging
 import subprocess
+import sys
 
 LOG = logging.getLogger('fitbit-req')
 
 
 class OAuthResponseHandler(BaseHTTPServer.BaseHTTPRequestHandler):
+
     def error(self, code, msg):
         self.send_response(code)
         self.end_headers()
-        self.wfile.write('An error occurred: %s', msg)
+        self.wfile.write('An error occurred: %s' % msg)
 
     def do_GET(self):
-        if '?' not in self.path:
-            return self.error(400, 'missing query')
+        try:
+            path, query = self.path.split('?')
+        except ValueError:
+            return self.error(400, 'no query string in request')
 
-        query = dict(
-            p.split('=') for p in
-            self.path.split('?', 1)[1].split('&')
+        params = dict(
+            p.split('=') for p in query.split('&')
         )
 
-        if 'code' not in query or 'state' not in query:
-            return self.error(400, 'missing code')
+        if not ('code' in params and 'state' in params):
+            return self.error(400, 'missing required parameters')
 
-        if query['state'] != self.server.state:
+        if params['state'] != self.server.state:
             return self.error(400, 'state mismatch')
 
-        self.server.auth_code = query['code']
+        self.server.auth_code = params['code']
 
         self.send_response(200)
         self.end_headers()
-        self.wfile.write('Thanks!')
+        self.wfile.write('\n'.join([
+            '<h1>Thanks</h1>',
+            '<p>The command line tools have successfully',
+            'authenticated. You may now close this',
+            'browser tab.</p>',
+        ]))
 
     def log_request(self, *args, **kwargs):
         pass
 
 
 class Server(BaseHTTPServer.HTTPServer):
+
     def __init__(self, state, port=3863):
         BaseHTTPServer.HTTPServer.__init__(
             self, ('127.0.0.1', port), OAuthResponseHandler)
@@ -78,11 +87,7 @@ def parse_args():
 def handle_oauth_redirect(state):
     s = Server(state=state)
     LOG.info('waiting for oauth redirect')
-    while True:
-        s.handle_request()
-        if s.auth_code:
-            break
-
+    s.handle_request()
     return s.auth_code
 
 
@@ -100,11 +105,16 @@ def main():
     subprocess.check_call(['xdg-open', url])
 
     code = handle_oauth_redirect(state)
+    if not code:
+        LOG.error('failed to retrieve oauth authentication code')
+        sys.exit(1)
+
     token = c.client.fetch_access_token(code)
 
     with open(args.token, 'w') as fd:
         LOG.info('writing token to %s', args.token)
         json.dump(token, fd)
+
 
 if __name__ == '__main__':
     main()
