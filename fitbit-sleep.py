@@ -3,16 +3,13 @@ import datetime
 import fitbit
 import json
 import logging
-import subprocess
-import sys
 
 LOG = logging.getLogger('fitbit-sleep')
+
 
 def datestr(val):
     return datetime.datetime(*(int(x) for x in val.split('-')))
 
-with open('token.json') as fd:
-    token = json.load(fd)
 
 def parse_args():
     p = argparse.ArgumentParser()
